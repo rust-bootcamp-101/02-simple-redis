@@ -1,14 +1,34 @@
-mod decode;
-mod encode;
+mod array;
+mod bool;
+mod bulk_string;
+mod double;
+mod frame;
+mod integer;
+mod map;
+mod null;
+mod set;
+mod simple_error;
+mod simple_string;
 
-use std::{
-    collections::BTreeMap,
-    ops::{Deref, DerefMut},
-};
-
-use bytes::BytesMut;
+use bytes::{Buf, BytesMut};
 use enum_dispatch::enum_dispatch;
 use thiserror::Error;
+
+pub use self::{
+    array::{RespArray, RespNullArray},
+    bulk_string::{BulkString, RespNullBulkString},
+    frame::RespFrame,
+    map::RespMap,
+    null::RespNull,
+    set::RespSet,
+    simple_error::SimpleError,
+    simple_string::SimpleString,
+};
+
+const BUFF_CAP: usize = 4096;
+
+const CRLF: &[u8] = b"\r\n";
+const CRLF_LEN: usize = CRLF.len();
 
 #[enum_dispatch]
 pub trait RespEncode {
@@ -39,186 +59,116 @@ pub enum RespError {
     ParseFloatError(#[from] std::num::ParseFloatError),
 }
 
-#[enum_dispatch(RespEncode)]
-#[derive(Debug, PartialEq)]
-pub enum RespFrame {
-    SimpleString(SimpleString),
-    Error(SimpleError),
-    Integer(i64),
-    BulkString(BulkString),
-    NullBulkString(RespNullBulkString),
-    Array(RespArray),
-    Null(RespNull),
-    NullArray(RespNullArray),
-    Boolean(bool),
-    Double(f64),
-    // BigNumber(i64), // TODO: 暂时不实现，目前在Rust下面还有很好的BigNumber的支持
-    Map(RespMap),
-    Set(RespSet),
+fn extract_fixed_data(
+    buf: &mut BytesMut,
+    expect: &str,
+    expect_type: &str,
+) -> Result<(), RespError> {
+    if buf.len() < expect.len() {
+        return Err(RespError::NotComplete);
+    }
+    if !buf.starts_with(expect.as_bytes()) {
+        return Err(RespError::InvalidFrameType(format!(
+            "expect: {}, got {:?}",
+            expect_type, buf
+        )));
+    }
+
+    buf.advance(expect.len());
+    Ok(())
 }
 
-#[derive(Debug, PartialEq)]
-pub struct SimpleString(String);
+fn extract_simple_frame_data(buf: &[u8], prefix: &str) -> Result<usize, RespError> {
+    if buf.len() < 3 {
+        // 符号 + \r\n 最少得是3个字符
+        return Err(RespError::NotComplete);
+    }
+    if !buf.starts_with(prefix.as_bytes()) {
+        return Err(RespError::InvalidFrameType(format!(
+            "expect: {}, got: {:?}",
+            prefix, buf
+        )));
+    }
 
-#[derive(Debug, PartialEq)]
-pub struct SimpleError(String);
+    // search for "\r\n"
+    let end = find_crlf(buf, 1).ok_or(RespError::NotComplete)?;
+    Ok(end)
+}
 
-#[derive(Debug, PartialEq)]
-pub struct BulkString(Vec<u8>);
+/// find_crlf: nth找第几个\r\n所在的下标位置
+/// 参数:
+///      buf: 数据
+///      nth: 要找的 \r\n 的数量
+fn find_crlf(buf: &[u8], nth: usize) -> Option<usize> {
+    let mut count: usize = 0;
+    for i in 1..buf.len() - 1 {
+        if buf[i] == b'\r' && buf[i + 1] == b'\n' {
+            count += 1;
+            if count == nth {
+                return Some(i);
+            }
+        }
+    }
+    None
+}
 
-#[derive(Debug, PartialEq)]
-pub struct RespArray(Vec<RespFrame>);
+// 返回 数组 [end, len]
+fn parse_length(buf: &[u8], prefix: &str) -> Result<(usize, usize), RespError> {
+    let end = extract_simple_frame_data(buf, prefix)?;
+    let s = String::from_utf8_lossy(&buf[prefix.len()..end]);
+    Ok((end, s.parse()?))
+}
 
-#[derive(Debug, PartialEq)]
-pub struct RespNull;
+fn calc_total_length(buf: &[u8], end: usize, len: usize, prefix: &str) -> Result<usize, RespError> {
+    let mut total = end + CRLF_LEN;
+    let mut data = &buf[total..];
+    match prefix {
+        "*" | "~" => {
+            // find nth CRLF in the buffer. for array and set, we need to find 1 CRLF for each element
+            for _ in 0..len {
+                let length = RespFrame::expect_length(data)?;
+                data = &data[length..];
+                total += length;
+            }
+            Ok(total)
+        }
+        "%" => {
+            // find nth CRLF in the buffer. for map, we need to find 2 CRLF for each key-value pair
+            for _ in 0..len {
+                // 获取一个 string key 的长度
+                let length = SimpleString::expect_length(data)?;
+                data = &data[length..];
+                total += length;
 
-#[derive(Debug, PartialEq)]
-pub struct RespNullArray;
-
-#[derive(Debug, PartialEq)]
-pub struct RespNullBulkString;
-
-// 使用 BTreeMap 保证是排序的，序列化的结果不会变
-#[derive(Debug, Default, PartialEq)]
-pub struct RespMap(BTreeMap<String, RespFrame>);
-
-#[derive(Debug, PartialEq)]
-pub struct RespSet(Vec<RespFrame>);
-
-impl Deref for SimpleString {
-    type Target = String;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
+                // 获取一个 Resp Frame value 的长度
+                let length = RespFrame::expect_length(data)?;
+                data = &data[length..];
+                total += length;
+            }
+            Ok(total)
+        }
+        _ => Ok(len + CRLF_LEN),
     }
 }
 
-impl Deref for SimpleError {
-    type Target = String;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
 
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
+    #[test]
+    fn test_calc_array_length() -> Result<()> {
+        let buf = b"*3\r\n$3\r\nset\r\n$5\r\nhello\r\n$5\r\nworld\r\n";
+        let prefix = "*";
+        let (end, len) = parse_length(buf, prefix)?;
+        let total_len = calc_total_length(buf, end, len, prefix)?;
+        assert_eq!(total_len, buf.len());
 
-impl Deref for BulkString {
-    type Target = Vec<u8>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl Deref for RespArray {
-    type Target = Vec<RespFrame>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl Deref for RespMap {
-    type Target = BTreeMap<String, RespFrame>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for RespMap {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl Deref for RespSet {
-    type Target = Vec<RespFrame>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl SimpleString {
-    pub fn new(s: impl Into<String>) -> Self {
-        Self(s.into())
-    }
-}
-
-impl SimpleError {
-    pub fn new(s: impl Into<String>) -> Self {
-        Self(s.into())
-    }
-}
-
-impl BulkString {
-    pub fn new(s: impl Into<Vec<u8>>) -> Self {
-        Self(s.into())
-    }
-}
-
-impl RespArray {
-    pub fn new(s: impl Into<Vec<RespFrame>>) -> Self {
-        Self(s.into())
-    }
-}
-
-impl RespMap {
-    pub fn new() -> Self {
-        Self(BTreeMap::new())
-    }
-}
-
-impl RespSet {
-    pub fn new(s: impl Into<Vec<RespFrame>>) -> Self {
-        Self(s.into())
-    }
-}
-
-impl From<&str> for SimpleString {
-    fn from(s: &str) -> Self {
-        SimpleString(s.to_string())
-    }
-}
-
-impl From<&str> for RespFrame {
-    fn from(s: &str) -> Self {
-        SimpleString(s.to_string()).into()
-    }
-}
-
-impl From<&str> for SimpleError {
-    fn from(s: &str) -> Self {
-        SimpleError(s.to_string())
-    }
-}
-
-impl From<&str> for BulkString {
-    fn from(s: &str) -> Self {
-        BulkString(s.as_bytes().to_vec())
-    }
-}
-
-impl From<&[u8]> for BulkString {
-    fn from(s: &[u8]) -> Self {
-        BulkString(s.to_vec())
-    }
-}
-
-impl From<&[u8]> for RespFrame {
-    fn from(s: &[u8]) -> Self {
-        BulkString(s.to_vec()).into()
-    }
-}
-
-impl<const N: usize> From<[u8; N]> for BulkString {
-    fn from(s: [u8; N]) -> Self {
-        BulkString(s.to_vec())
-    }
-}
-
-impl<const N: usize> From<&[u8; N]> for RespFrame {
-    fn from(s: &[u8; N]) -> Self {
-        BulkString(s.to_vec()).into()
+        let buf = b"*3\r\n$3\r\nset\r\n";
+        let prefix = "*";
+        let (end, len) = parse_length(buf, prefix)?;
+        let err = calc_total_length(buf, end, len, prefix).unwrap_err();
+        assert_eq!(err, RespError::NotComplete);
+        Ok(())
     }
 }
