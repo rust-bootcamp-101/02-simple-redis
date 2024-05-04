@@ -2,8 +2,8 @@ use bytes::BytesMut;
 use enum_dispatch::enum_dispatch;
 
 use crate::{
-    BulkString, RespArray, RespDecode, RespError, RespMap, RespNull, RespNullArray,
-    RespNullBulkString, RespSet, SimpleError, SimpleString,
+    BulkString, RespArray, RespDecode, RespError, RespMap, RespNull, RespSet, SimpleError,
+    SimpleString,
 };
 
 #[enum_dispatch(RespEncode)]
@@ -13,10 +13,8 @@ pub enum RespFrame {
     Error(SimpleError),
     Integer(i64),
     BulkString(BulkString),
-    NullBulkString(RespNullBulkString),
     Array(RespArray),
     Null(RespNull),
-    NullArray(RespNullArray),
     Boolean(bool),
     Double(f64),
     // BigNumber(i64), // TODO: 暂时不实现，目前在Rust下面还有很好的BigNumber的支持
@@ -42,26 +40,12 @@ impl RespDecode for RespFrame {
                 Ok(frame.into())
             }
             Some(b'$') => {
-                // try null bulk string first
-                match RespNullBulkString::decode(buf) {
-                    Ok(frame) => Ok(frame.into()),
-                    Err(RespError::NotComplete) => Err(RespError::NotComplete),
-                    Err(_) => {
-                        let frame = BulkString::decode(buf)?;
-                        Ok(frame.into())
-                    }
-                }
+                let frame = BulkString::decode(buf)?;
+                Ok(frame.into())
             }
             Some(b'*') => {
-                // try null array first
-                match RespNullArray::decode(buf) {
-                    Ok(frame) => Ok(frame.into()),
-                    Err(RespError::NotComplete) => Err(RespError::NotComplete),
-                    Err(_) => {
-                        let frame = RespArray::decode(buf)?;
-                        Ok(frame.into())
-                    }
-                }
+                let frame = RespArray::decode(buf)?;
+                Ok(frame.into())
             }
             Some(b'~') => {
                 let frame = RespSet::decode(buf)?;

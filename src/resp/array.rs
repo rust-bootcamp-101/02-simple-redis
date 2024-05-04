@@ -4,30 +4,27 @@ use bytes::{Buf, BytesMut};
 
 use crate::{RespDecode, RespEncode, RespError, RespFrame};
 
-use super::{calc_total_length, extract_fixed_data, parse_length, BUFF_CAP, CRLF_LEN};
+use super::{calc_total_length, parse_length, BUFF_CAP, CRLF_LEN};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RespArray(pub(crate) Vec<RespFrame>);
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct RespNullArray;
 
 // - array: "*<number-of-elements>\r\n<element-1>...<element-n>"
 impl RespEncode for RespArray {
     fn encode(self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(BUFF_CAP);
-        buf.extend_from_slice(&format!("*{}\r\n", self.0.len()).into_bytes());
-        for frame in self.0 {
-            buf.extend_from_slice(&frame.encode());
+        let len = if self.len() == 0 {
+            -1
+        } else {
+            self.len() as isize
+        };
+        buf.extend_from_slice(&format!("*{}\r\n", len).into_bytes());
+        if len > 0 {
+            for frame in self.0 {
+                buf.extend_from_slice(&frame.encode());
+            }
         }
         buf
-    }
-}
-
-// - null array: "*-1\r\n"
-impl RespEncode for RespNullArray {
-    fn encode(self) -> Vec<u8> {
-        b"*-1\r\n".to_vec()
     }
 }
 
@@ -35,6 +32,11 @@ impl RespDecode for RespArray {
     const PREFIX: &'static str = "*";
     fn decode(buf: &mut BytesMut) -> Result<Self, RespError> {
         let (end, len) = parse_length(buf, Self::PREFIX)?;
+        if len == 0 {
+            // 吃掉 empty array *0\r\n\r\n 字符，n表示数字，如数组字符长度为 *0\r\n\r\n
+            buf.advance(end + CRLF_LEN + CRLF_LEN);
+            return Ok(RespArray::new([]));
+        }
         let total_len = calc_total_length(buf, end, len, Self::PREFIX)?;
         if buf.len() < total_len {
             return Err(RespError::NotComplete);
@@ -50,17 +52,6 @@ impl RespDecode for RespArray {
     fn expect_length(buf: &[u8]) -> Result<usize, RespError> {
         let (end, len) = parse_length(buf, Self::PREFIX)?;
         calc_total_length(buf, end, len, Self::PREFIX)
-    }
-}
-
-impl RespDecode for RespNullArray {
-    const PREFIX: &'static str = "*";
-    fn decode(buf: &mut BytesMut) -> Result<Self, RespError> {
-        extract_fixed_data(buf, "*-1\r\n", "NullArray")?;
-        Ok(RespNullArray)
-    }
-    fn expect_length(_buf: &[u8]) -> Result<usize, RespError> {
-        Ok(5)
     }
 }
 
@@ -102,7 +93,7 @@ mod tests {
 
     #[test]
     fn test_null_array_encode() {
-        let frame: RespFrame = RespNullArray.into();
+        let frame: RespFrame = RespArray::new([]).into();
         assert_eq!(frame.encode(), b"*-1\r\n")
     }
 
@@ -131,10 +122,10 @@ mod tests {
     #[test]
     fn test_null_array_decode() -> Result<()> {
         let mut buf = BytesMut::new();
-        buf.put_slice(b"*-1\r\n");
+        buf.put_slice(b"*0\r\n\r\n");
 
-        let frame = RespNullArray::decode(&mut buf)?;
-        assert_eq!(frame, RespNullArray);
+        let frame = RespArray::decode(&mut buf)?;
+        assert_eq!(frame, RespArray::new([]));
         Ok(())
     }
 }
