@@ -15,8 +15,14 @@ use enum_dispatch::enum_dispatch;
 use thiserror::Error;
 
 pub use self::{
-    array::RespArray, bulk_string::BulkString, frame::RespFrame, map::RespMap, null::RespNull,
-    set::RespSet, simple_error::SimpleError, simple_string::SimpleString,
+    array::{RespArray, RespNullArray},
+    bulk_string::{BulkString, RespNullBulkString},
+    frame::RespFrame,
+    map::RespMap,
+    null::RespNull,
+    set::RespSet,
+    simple_error::SimpleError,
+    simple_string::SimpleString,
 };
 
 const BUFF_CAP: usize = 4096;
@@ -51,6 +57,9 @@ pub enum RespError {
 
     #[error("Parse error: {0}")]
     ParseFloatError(#[from] std::num::ParseFloatError),
+
+    #[error("Internal server error")]
+    InternalServerError,
 }
 
 fn extract_fixed_data(

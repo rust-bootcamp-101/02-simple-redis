@@ -6,7 +6,7 @@ use crate::{RespDecode, RespEncode, RespError};
 
 use super::{extract_simple_frame_data, CRLF_LEN};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SimpleError(pub(crate) String);
 
 // - error: "-Error message\r\n"
@@ -41,6 +41,12 @@ impl SimpleError {
 impl From<&str> for SimpleError {
     fn from(s: &str) -> Self {
         SimpleError(s.to_string())
+    }
+}
+
+impl From<String> for SimpleError {
+    fn from(s: String) -> Self {
+        SimpleError(s)
     }
 }
 

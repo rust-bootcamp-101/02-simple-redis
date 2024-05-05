@@ -1,8 +1,8 @@
 use crate::{Backend, RespArray, RespFrame, RespNull};
 
 use super::{
-    extract_args, validate_command, CommandError, CommandExecutor, Get, Set, ONE_ARG, ONE_CMD,
-    RESP_OK, TWO_ARGS,
+    extract_args, validate_command, CommandArgs, CommandError, CommandExecutor, Get, NArgs, Set,
+    ONE_ARG, ONE_CMD, RESP_OK, TWO_ARGS,
 };
 
 impl CommandExecutor for Get {
@@ -21,11 +21,23 @@ impl CommandExecutor for Set {
     }
 }
 
+impl CommandArgs for Get {
+    fn expect_args() -> NArgs {
+        NArgs::Equal(ONE_ARG)
+    }
+}
+
+impl CommandArgs for Set {
+    fn expect_args() -> NArgs {
+        NArgs::Equal(TWO_ARGS)
+    }
+}
+
 impl TryFrom<RespArray> for Get {
     type Error = CommandError;
 
     fn try_from(value: RespArray) -> Result<Self, Self::Error> {
-        validate_command(&value, &["get"], ONE_ARG)?;
+        validate_command::<Self>(&value, &["get"])?;
         let mut args = extract_args(value, ONE_CMD)?.into_iter();
 
         match args.next() {
@@ -41,7 +53,7 @@ impl TryFrom<RespArray> for Set {
     type Error = CommandError;
 
     fn try_from(value: RespArray) -> Result<Self, Self::Error> {
-        validate_command(&value, &["set"], TWO_ARGS)?;
+        validate_command::<Self>(&value, &["set"])?;
 
         let mut args = extract_args(value, ONE_CMD)?.into_iter();
         match (args.next(), args.next()) {

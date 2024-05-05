@@ -74,14 +74,14 @@ mod tests {
         ])
         .into();
         let data = frame.encode();
-        assert_eq!(data, b"~2\r\n*2\r\n:+1234\r\n#t\r\n$5\r\nworld\r\n");
+        assert_eq!(data, b"~2\r\n*2\r\n:1234\r\n#t\r\n$5\r\nworld\r\n");
         Ok(())
     }
 
     #[test]
     fn test_set_decode() -> Result<()> {
         let mut buf = BytesMut::new();
-        buf.put_slice(b"~2\r\n*2\r\n:+1234\r\n#t\r\n$5\r\nworld\r\n");
+        buf.put_slice(b"~2\r\n*2\r\n:1234\r\n#t\r\n$5\r\nworld\r\n");
         let frame = RespSet::decode(&mut buf)?;
 
         let expected_frame = RespSet::new([

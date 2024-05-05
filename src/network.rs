@@ -36,10 +36,24 @@ pub async fn stream_handler(stream: TcpStream, backend: Backend) -> Result<()> {
                 let request = RedisRequest { frame, backend };
                 // call request_handler with the frame
 
-                let response = request_handler(request).await?;
-                info!("Sending response: {:?}", response.frame);
-                // send the response back to the stream
-                framed.send(response.frame).await?;
+                match request_handler(request).await {
+                    Ok(response) => {
+                        info!(
+                            "Sending response: {:?}",
+                            String::from_utf8_lossy(&response.frame.clone().encode())
+                        );
+                        // send the response back to the stream
+                        framed.send(response.frame).await?;
+                    }
+                    Err(e) => {
+                        let frame = RespFrame::Error(e.to_string().into());
+                        info!(
+                            "Sending response: {:?}",
+                            String::from_utf8_lossy(&frame.clone().encode())
+                        );
+                        framed.send(frame).await?;
+                    }
+                }
             }
             Some(Err(e)) => return Err(e), // 返回错误
             None => return Ok(()),         // 没有数据
