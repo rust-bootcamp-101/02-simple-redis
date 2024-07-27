@@ -4,13 +4,10 @@ use bytes::{Buf, BytesMut};
 
 use crate::{RespDecode, RespEncode, RespError, RespFrame};
 
-use super::{calc_total_length, extract_fixed_data, parse_length, BUFF_CAP, CRLF_LEN};
+use super::{calc_total_length, parse_length, BUFF_CAP, CRLF_LEN};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RespArray(pub(crate) Vec<RespFrame>);
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RespNullArray;
 
 // - array: "*<number-of-elements>\r\n<element-1>...<element-n>"
 impl RespEncode for RespArray {
@@ -21,13 +18,6 @@ impl RespEncode for RespArray {
             buf.extend_from_slice(&frame.encode());
         }
         buf
-    }
-}
-
-// - null array: "*-1\r\n"
-impl RespEncode for RespNullArray {
-    fn encode(self) -> Vec<u8> {
-        b"*-1\r\n".to_vec()
     }
 }
 
@@ -53,20 +43,13 @@ impl RespDecode for RespArray {
     }
 }
 
-impl RespDecode for RespNullArray {
-    const PREFIX: &'static str = "*";
-    fn decode(buf: &mut BytesMut) -> Result<Self, RespError> {
-        extract_fixed_data(buf, "*-1\r\n", "NullArray")?;
-        Ok(RespNullArray)
-    }
-    fn expect_length(_buf: &[u8]) -> Result<usize, RespError> {
-        Ok(5)
-    }
-}
-
 impl RespArray {
     pub fn new(s: impl Into<Vec<RespFrame>>) -> Self {
         Self(s.into())
+    }
+
+    pub fn null_array_encode() -> Vec<u8> {
+        b"*-1\r\n".to_vec()
     }
 }
 
@@ -102,8 +85,7 @@ mod tests {
 
     #[test]
     fn test_null_array_encode() {
-        let frame: RespFrame = RespNullArray.into();
-        assert_eq!(frame.encode(), b"*-1\r\n")
+        assert_eq!(RespArray::null_array_encode(), b"*-1\r\n")
     }
 
     #[test]
@@ -125,16 +107,6 @@ mod tests {
         let frame = RespArray::decode(&mut buf)?;
         assert_eq!(frame, RespArray::new([b"set".into(), b"hello".into()]));
 
-        Ok(())
-    }
-
-    #[test]
-    fn test_null_array_decode() -> Result<()> {
-        let mut buf = BytesMut::new();
-        buf.put_slice(b"*-1\r\n");
-
-        let frame = RespNullArray::decode(&mut buf)?;
-        assert_eq!(frame, RespNullArray);
         Ok(())
     }
 }
