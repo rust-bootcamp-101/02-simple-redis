@@ -17,7 +17,7 @@ pub enum RespFrame {
     Null(RespNull),
     Boolean(bool),
     Double(f64),
-    // BigNumber(i64), // TODO: 暂时不实现，目前在Rust下面还有很好的BigNumber的支持
+    // BigNumber(i64), // TODO: 暂时不实现，目前在Rust下面还没有很好的BigNumber的支持
     Map(RespMap),
     Set(RespSet),
 }
